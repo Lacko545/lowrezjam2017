@@ -1,6 +1,15 @@
-maid64 = require 'maid64/maid64'
+local maid64 = require 'maid64/maid64'
 
-bullets = {}
+local bullets = {}
+local lasers  = {}
+
+local enemies = {}
+
+local t, shakeDuration, shakeMagnitude = 0, -1, 0
+
+function startShake(duration, magnitude)
+    t, shakeDuration, shakeMagnitude = 0, duration or 1, magnitude or 5
+end
 
 light = {203,219,252}
 dark =  {217,87,99}
@@ -25,55 +34,92 @@ function clean(objects)
 	end
 end
 
-function spawn_bullet( x, y, dir, vel, color )
+function spawn_bullet( x, y, dir, vel, color, t, lifetime)
 	bullet = {}
 	
 	bullet.x = x
 	bullet.y = y
 	bullet.dir = dir
 	bullet.velocity = vel
+	
+	bullet.lifetime = lifetime
+
 	if(color == 'dark') then
 		bullet.mesh = dark_bullet
 	else    bullet.mesh = light_bullet end
-
-	table.insert(bullets,bullet)
+	
+	if t == nil then table.insert(bullets, bullet)
+	else table.insert(t,bullet) end
 end
 
 function move( movables, dt )
 	for i, obj in ipairs(movables) do
 		obj.x = obj.x + obj.dir[1] * dt * obj.velocity
-		obj.y = obj.y + obj.dir[2]*dt*obj.velocity
-	end
-end
-
-function collide(collidables)
-	for i, obj in ipairs(collidables) do
-		
+		obj.y = obj.y + obj.dir[2] * dt * obj.velocity
+		if obj.lifetime ~= nil then
+			obj.lifetime = obj.lifetime - dt
+			if obj.lifetime <= 0 then
+				table.remove(movables, i)
+			end
+		end
 	end
 end
 
 function make_laser_generator( start, increment, period, color )
-
 	local time = 0
+	local col = 'light'
 
 	return function ( dt )
 		if time >= period then
+			if color == 'light' or color == 'dark' then col = color
+			elseif color == 'random' then 
+				if math.random(100)%2 == 1 then
+					col = 'dark'
+				else 
+					col = 'light'
+				end
+			elseif col == 'light' then col = 'dark'
+			elseif col == 'dark' then col = 'light' end
+
 			time = 0
 
 			for i=1,64 do	
 				spawn_bullet(   start[1] + i*increment[1], 
 						start[2] + i*increment[2],
 						{increment[2],-increment[1]},
-						30,
-						color
+						15,
+						col,
+						lasers
 						)
 			end
 		else time = time + dt end
 	end
 end
 
-function player_update( dt )
+function basic_gun(dir)
+	if player.cooldown > 0 then return end
+	spawn_bullet(player.x + math.floor(player.width/2), 
+		     player.y + math.floor(player.height/2) ,
+			dir, 70, player.state)
+	player.cooldown = 0.1
+end
 
+function shot_gun(dir)
+	if player.cooldown > 0 then return end
+	for i = 1, 10 do
+		spawn_bullet(player.x + math.floor(player.width/2), 
+			     player.y + math.floor(player.height/2),
+			     {dir[1] + math.random()/3, dir[2] + math.random()/3}, 
+			     80, player.state,nil, 0.2 + math.random()/3)
+	end
+
+	startShake(0.1, 4)
+	player.cooldown = 0.5
+end
+
+function player_update( dt )
+	if player.cooldown > 0 then player.cooldown = player.cooldown - dt end
+	
 	if love.keyboard.isDown('w') then
 		player.y = player.y - dt*player.velocity
 	end
@@ -90,24 +136,16 @@ function player_update( dt )
 	end
 
 	if love.keyboard.isDown('up') then
-		spawn_bullet(player.x + math.floor(player.width/2), 
-			     player.y + math.floor(player.height/2) ,
-				{0,-1}, 40, player.state)
+		player.shoot({0,-1})
 	end
 	if love.keyboard.isDown('down') then
-		spawn_bullet(player.x + math.floor(player.width/2), 
-			     player.y + math.floor(player.height/2) ,
-				{0,1}, 40, player.state )
+		player.shoot({0,1})
 	end
 	if love.keyboard.isDown('left') then
-		spawn_bullet(player.x + math.floor(player.width/2), 
-			     player.y + math.floor(player.height/2) ,
-				{-1,0}, 40, player.state)
+		player.shoot({-1,0})
 	end
 	if love.keyboard.isDown('right') then
-		spawn_bullet(player.x + math.floor(player.width/2), 
-			     player.y + math.floor(player.height/2) ,
-				{1,0}, 40, player.state)
+		player.shoot({1,0})
 	end
 end
 
@@ -121,6 +159,9 @@ function love.keypressed(key)
 			player.state = 'light'
 			player.active_mesh = player.mesh_light
 		end
+	elseif key == 'lctrl' then
+
+		player.shoot = player.weapons[2]
 	end
 end
 
@@ -131,11 +172,14 @@ function love.load()
 	player = {
 		width = 3,
 		height = 3,
-		velocity = 25,
+		velocity = 30,
 		state = 'light',
+		cooldown = 0,
 
 		x = 4,
 		y = 4,
+		weapons = { basic_gun, shot_gun},
+		shoot = basic_gun
 	}
 
 	background = maid64.newImage('bg1.png')
@@ -155,9 +199,10 @@ function love.load()
 	})
 	player.active_mesh = player.mesh_light
 
-	gen1 = make_laser_generator({64,0},{-1,0},3,'light')
-	gen2 = make_laser_generator({64,64},{0,-1},4,'dark')
-	gen3 = make_laser_generator({64,0},{-1,0},2,'dark')
+	gen1 = make_laser_generator({64,0},{-1,0},1,'random')
+	gen2 = make_laser_generator({64,64},{0,-1},math.pi,'a')
+
+	gen3 = make_laser_generator({-1,64},{1,0},2,'a')
 end
 
 function love.update(dt)
@@ -167,24 +212,39 @@ function love.update(dt)
 	gen1(dt)
 	gen2(dt)
 	gen3(dt)
-
 	move(bullets, dt)
+	move(lasers, dt)
 	
-	collide( bullets )
-	collide( player )
 
 	clean(bullets)
+	clean(lasers)
+
+	if t < shakeDuration then
+		t = t + dt
+	end
 end
 
 function love.draw()
 	maid64.start()
+
+
 	love.graphics.draw(background,0,0)
 
 	love.graphics.draw(player.active_mesh, player.x,player.y)	
 	for i, bullet in ipairs(bullets) do
 		love.graphics.draw(bullet.mesh, bullet.x, bullet.y)
 	end
+	for i, bullet in ipairs(lasers) do
+		love.graphics.draw(bullet.mesh, bullet.x, bullet.y)
+	end
 	
+	
+	if t < shakeDuration then
+		local dx = love.math.random(-shakeMagnitude, shakeMagnitude)
+		local dy = love.math.random(-shakeMagnitude, shakeMagnitude)
+		love.graphics.translate(dx, dy)
+	end
+
 
 	maid64.finish()
 end
